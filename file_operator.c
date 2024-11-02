@@ -4,6 +4,9 @@
 
 #define BUFFER_SIZE 128
 
+static char *message_buffer;
+static ssize_t message_length;
+
 MODULE_LICENSE("GPL"); 
 MODULE_AUTHOR("salahgafoor"); 
 MODULE_DESCRIPTION("File operator driver in Linux");
@@ -15,22 +18,19 @@ static ssize_t put_file_content(struct file * file_pointer,
                                 size_t count, 
                                 loff_t *offset)
 {
-    size_t len = 0;
-    
-    char msg[BUFFER_SIZE];
     if (count > BUFFER_SIZE - 1)
         return -EINVAL;
 
-    memset(msg, 0, BUFFER_SIZE); // Clear buffer
-    len = count;
+    memset(message_buffer, 0, BUFFER_SIZE); // Clear buffer
+    message_length = count;
 
-    if (copy_from_user(msg, user_space_buffer, count)) {
+    if (copy_from_user(message_buffer, user_space_buffer, count)) {
         return -EFAULT;
     }
 
-    msg[count] = '\0';
-    printk("Buffer content %s has been written to module", msg);
-    return len;
+    message_buffer[count] = '\0';
+    printk("Buffer content %s has been written to module", message_buffer);
+    return message_length;
 
 }    
 
@@ -39,22 +39,23 @@ static ssize_t get_file_content(struct file * file_pointer,
                                 size_t count, 
                                 loff_t *offset)
 {
-    char msg[] = "Module: File Operator\n";
-    size_t len = strlen(msg);
     int result;
 
-    if(*offset >= len)
-    {
+    if (*offset > 0 || count < message_length) // Check if already read or buffer size too small
         return 0;
-    }
 
-    result = copy_to_user(user_space_buffer, msg, len);
+    result = copy_to_user(user_space_buffer, message_buffer, message_length);
+    if(result) // we are expecting a zero; if it's one, then return error
+    {
+        return -EFAULT;
+    }
     printk("This is from file operator driver");
     
-    *offset += len;
+    *offset = message_length;
     
-    return len;
+    return message_length;
 }
+
 struct proc_ops proc_ops_driver = {
     .proc_read = get_file_content,
     .proc_write = put_file_content
@@ -62,6 +63,10 @@ struct proc_ops proc_ops_driver = {
 
 static int opening_function (void) 
 { 
+    message_buffer = kmalloc(BUFFER_SIZE, GFP_KERNEL);
+    if (!message_buffer) {
+        return -ENOMEM;
+    }
     proc_entry = proc_create("file_operator_driver", 
                                     0666,
                                     NULL,
@@ -73,7 +78,9 @@ static int opening_function (void)
 
 static void closing_function (void) 
 { 
+
     proc_remove(proc_entry);
+    kfree(message_buffer);
     printk("file_operator_driver Module has been removed");
 }
 
